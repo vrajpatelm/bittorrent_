@@ -29,9 +29,9 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
         info_hash = hashlib.sha1(info_bencoded).digest()
     except KeyError:
         raise ValueError("No ""info"" value found in torrent_file_path")
-    print(info_hash)
-    print("Announace ",announce)
-    print(decode[b"info"][b"files"])
+    # print(info_hash)
+    # print("Announace ",announce)
+    # print(decode[b"info"][b"files"])
 
     # generate peer_id
     prefix = "-PC0001-" # my cilent + version
@@ -60,7 +60,6 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
     #build url for request
     # encode the url properly
     queue_parts=[]
-    print(params)
     for key ,val in params.items():
         if isinstance(val,bytes):
 
@@ -70,8 +69,6 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
             queue_parts.append(f"{key}={urllib.parse.quote(str(val),safe='')}")
 
     query_string = "&".join(queue_parts) # and+parts+and symbol
-    print(queue_parts)
-    print(query_string)
     # build full announcement string
     if "?"in announce:
         full_url = announce + "&"+query_string
@@ -80,6 +77,34 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
 
         #send http request
     with urllib.request.urlopen(full_url,timeout=10) as response:
-        print(response.read())
+        tracker_data = response.read()
+    tracker_decoded_data = parser.bdncode_to_dict(tracker_data)
+
+    if b"failure reason" in tracker_decoded_data:
+        failure = tracker_decoded_data[b"failure reason"].decode("utf-8")
+        raise ValueError(f"The Error is {failure}")
+    if b"peers" not in tracker_decoded_data:
+        raise ValueError("Peers is not present")
+    peers_data = tracker_decoded_data[b'peers']
+
+    # to make peers_ip_list for both compact and non-compact ip
+
+    # for Compact 4byes (ip address)+ 2bytes(port)
+    peers=[]
+    if isinstance(peers_data,bytes):
+        if len(peers_data)%6!=0:
+            raise ValueError("Invaild Compact peer_data")
+        #! For non_compact is left
+
+    elif isinstance(peers_data,list):
+        for peer in peers_data:
+            ip = peer[b"ip"].decode("utf-8")
+            port = peer[b"port"]
+            peers.append((ip,port))
+    else:
+        raise ValueError("Unknown peers data ")
+
+    return peers
+
 
 get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
