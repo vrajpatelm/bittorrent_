@@ -6,6 +6,23 @@ import hashlib
 import urllib.parse
 import urllib.request
 
+def calcu_info_hash(torrent_file):
+    with open(torrent_file, 'rb') as f:
+        torrent_data = f.read()
+    decode = parser.bdncode_to_dict(torrent_data)
+
+    if b"announce" not in decode:
+        raise ValueError("No announce value found in torrent_file_path")
+    announce = decode[b"announce"].decode('utf-8')
+
+    # Info hash calculate
+    try:
+        info = decode[b"info"]
+        info_bencoded = parser.dict_to_bdncode_dict_(info)
+        info_hash = hashlib.sha1(info_bencoded).digest()
+    except KeyError:
+        raise ValueError("No ""info"" value found in torrent_file_path")
+
 def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
     """
     Build a url to send tracker request for the list of peers
@@ -30,11 +47,11 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
     except KeyError:
         raise ValueError("No ""info"" value found in torrent_file_path")
     # print(info_hash)
-    # print("Announace ",announce)
+    # print("Announce ",announce)
     # print(decode[b"info"][b"files"])
 
     # generate peer_id
-    prefix = "-PC0001-" # my cilent + version
+    prefix = "-PC0001-" # my client + version
     suffix = "".join(random.choices(string.ascii_letters+string.digits,k=12))
     peer_id = prefix+suffix
 
@@ -106,5 +123,7 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
 
     return peers
 
-
-get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
+if __name__ =="__main__":
+    a =get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
+    print(a)
+    print()
