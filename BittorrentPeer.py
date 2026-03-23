@@ -133,9 +133,25 @@ class BittorrentPeer:
             self.writer.close()
             await self.writer.wait_closed()
         self.connected = False
+    async def download_piece_from_peers(self,peer,piece_index,piece_length,block_size=16384): # block size 16KB
+        """
+            Download a single piece from a peer.
+            Returns dict of {offset: block_data} or None if failed.
+        """
+        if not peer.has_peice():
+            return None
+        if not peer.interested:
+            await peer.send_interested()
 
+        # waite for unchoke msg
+        wait_time =0
+        if peer.choked and wait_time >5:
+            msg,payload = peer.receive_message()
+            print(msg,payload)
 
+from TrackerRequest import get_peers_from_tracker
 if __name__ == "__main__":
     peers = TrackerRequest.get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
     bitt = BittorrentPeer("151.59.115.17", 48909 ,b"\xd9\x84\xf6z\xf9\x91{!L\xd8\xb6\x04\x8a\xb5bL}\xf6\xa0z","-PC0001-ItDonueIMvfW")
+
     print(bitt.bitfield)
