@@ -67,6 +67,7 @@ class BittorrentPeer:
         await self.writer.drain()
         self.interested=True
     async def send_request(self,piece_index,begin,length):
+        """ Request Block from peers"""
         req_msg = struct.pack(">IBIII",13,6,piece_index,begin,length)
         self.writer.write(req_msg)
         await self.writer.drain()
@@ -145,9 +146,56 @@ class BittorrentPeer:
 
         # waite for unchoke msg
         wait_time =0
-        if peer.choked and wait_time >5:
-            msg,payload = peer.receive_message()
-            print(msg,payload)
+        while peer.choked and wait_time >5:
+            msg_id,payload = await peer.receive_message()
+            if msg_id is not None:
+                peer.handel_message(msd_id,payload)
+            await asyncio.sleep(0.1)
+            wait_time+=0.1
+
+        if peer.peer_choking :
+            return None
+        
+        #Request all the block of the peice
+        blocks_needed=[]
+        for begin in range(0,piece_index,block_size):
+            length = min(block_size,piece_index-begin)
+            blocks_needed.append((begin,length))
+            await peer.send_request(piece_index,begin,length)
+        # collect blocks
+        
+        peice_data={}
+        timeout_counter=0
+        max_timeout=100
+        while(len(peice_data)<len(blocks_needed) and timeout_counter<max_timeout):
+            msd_id,payload = await peer.receive_message()
+            
+            if msg_id is None:
+                timeout_counter+=1
+                await asyncio.sleep(0.1)
+                continue
+            result = peer.handel_message(msg_id,payload)
+            if result and result[0]=="peice":
+                _,idx,begin,block=result
+                if idx==piece_index:
+                    peice_data[begin]=block
+                    timeout_counter=0
+        if len(peice_data)<len(blocks_needed):
+            return None
+        
+        return peice_data
+class TorrentDownload:
+    """Manage concurrnt downloading from multiple peers."""
+    def __init__(self):
+        pass
+    def get_peice_length(self,peice_idx):
+        pass
+    def get_peice_hash(self,peice_idx):
+        pass
+    def verify_peice(self,peice_idx,peice_data):
+        pass
+    def peer_worker(self,ip,port):
+        pass
 
 from TrackerRequest import get_peers_from_tracker
 if __name__ == "__main__":
