@@ -1,10 +1,12 @@
 import asyncio
+import os
 import socket
 import struct
 import hashlib
 import time
 import TrackerRequest
 from collections import defaultdict
+from parser import bdncode_to_dict,dict_to_bdncode_dict_
 
 class BittorrentPeer:
     """Handel single peer communication"""
@@ -149,7 +151,7 @@ class BittorrentPeer:
         while peer.choked and wait_time >5:
             msg_id,payload = await peer.receive_message()
             if msg_id is not None:
-                peer.handel_message(msd_id,payload)
+                peer.handel_message(msg_id,payload)
             await asyncio.sleep(0.1)
             wait_time+=0.1
 
@@ -186,20 +188,62 @@ class BittorrentPeer:
         return peice_data
 class TorrentDownload:
     """Manage concurrnt downloading from multiple peers."""
-    def __init__(self):
-        pass
-    def get_peice_length(self,peice_idx):
-        pass
-    def get_peice_hash(self,peice_idx):
-        pass
-    def verify_peice(self,peice_idx,peice_data):
-        pass
+    def __init__(self,torrent_file_path,peers,max_peers=5):
+        # max_peer = 5 beacuse to prevent too many open connection for performance 
+        self.torrent_file_path=torrent_file_path
+        self.peers =peers
+        self.max_peers = max_peers
+        
+        with open(torrent_file_path,"rb") as f:
+            torrent_data = bdncode_to_dict(f.read())
+
+        print(torrent_data)
+        self.info = torrent_data[b"info"]
+        self.info_hash = hashlib.sha1(dict_to_bdncode_dict_(self.info)).digest()
+        self.piece_length = self.info[b'piece length']
+        self.pieces_hash = self.info[b'pieces']
+        self.num_pieces = len(self.pieces_hash)//20
+        
+        # calculate Total length of all the files if availabe
+        if b"length" in self.info:
+            # for single line
+            self.total_len = self.info[b"length"]
+        else:
+            # for multiple files
+            self.total_len = sum(f[b"length"] for f in self.info[b"files"])
+        self.peer_id = b"-PY0001-"+os.urandom(12) # peerid: 20byte "-<client id><version>-"+<remaing 12byte>
+
+        #peice management
+        self.downloaded_pieces = {}
+        self.piece_locks = {i: asyncio.Lock() for i in range(self.num_pieces)} # each peice has one peer at a time
+        self.pieces_in_progress = set()
+        self.connected_peers = []
+
+        print(f"Torrent: {self.num_pieces} pieces, {self.total_len} bytes total")
+            
+    def get_peice_length(self,piece_idx):
+        """Get the length of a specific piece."""
+        if piece_idx==self.num_pieces-1: # check for last peice which is mostly smaller than rest
+            return self.total_len -(piece_idx *self.piece_length)
+        return self.piece_length
+    def get_piece_hash(self,piece_idx):
+        """Get the hash of a specific piece."""
+        return self.pieces_hash[piece_idx*20:(piece_idx +1)*20]
+
+    def verify_piece(self,piece_idx,piece_data):
+        calculate_hash = hashlib.sha1(piece_idx).digest()
+        expected_hash=self.get_piece_hash(piece_idx)
+        return calculate_hash==expected_hash
+
     def peer_worker(self,ip,port):
+        pass
+    def download(self ,output_file):
         pass
 
 from TrackerRequest import get_peers_from_tracker
 if __name__ == "__main__":
     peers = TrackerRequest.get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
     bitt = BittorrentPeer("151.59.115.17", 48909 ,b"\xd9\x84\xf6z\xf9\x91{!L\xd8\xb6\x04\x8a\xb5bL}\xf6\xa0z","-PC0001-ItDonueIMvfW")
-
-    print(bitt.bitfield)
+    dol = TorrentDownload('C:\\Users\VRAJ\Downloads\\test.torrent',peers)
+    
+    
