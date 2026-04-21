@@ -4,6 +4,10 @@ import socket
 import struct
 import hashlib
 import time
+
+from PIL.ImageChops import offset
+from gitdb.util import join
+
 import TrackerRequest
 from collections import defaultdict
 from parser import bdncode_to_dict,dict_to_bdncode_dict_
@@ -169,8 +173,8 @@ class BittorrentPeer:
         peice_data={}
         timeout_counter=0
         max_timeout=100
-        while(len(peice_data)<len(blocks_needed) and timeout_counter<max_timeout):
-            msd_id,payload = await peer.receive_message()
+        while len(peice_data)<len(blocks_needed) and timeout_counter<max_timeout:
+            msg_id,payload = await peer.receive_message()
             
             if msg_id is None:
                 timeout_counter+=1
@@ -187,9 +191,9 @@ class BittorrentPeer:
         
         return peice_data
 class TorrentDownload:
-    """Manage concurrnt downloading from multiple peers."""
+    """Manage concurrent downloading from multiple peers."""
     def __init__(self,torrent_file_path,peers,max_peers=5):
-        # max_peer = 5 beacuse to prevent too many open connection for performance 
+        # max_peer = 5 because to prevent too many open connection for performance
         self.torrent_file_path=torrent_file_path
         self.peers =peers
         self.max_peers = max_peers
@@ -255,12 +259,52 @@ class TorrentDownload:
 
         self.connected_peers.append(peer)
 
+        try:
+            # download peice
+            while len(self.downloaded_pieces) < self.num_pieces :
+                # find a peice to download
+                piece_idx =None
+                for i in range(self.num_pieces):
+                    if i not in self.pieces_in_progress and i not in self.downloaded_pieces and peer.has_piece(i):
+                         async with self.piece_locks[i]:
+                             if i not in self.pieces_in_progress:
+                                self.pieces_in_progress.add(i)
+                                piece_idx=i
+                                break
+                if piece_idx is None:
+                    # No pieces available, wait a bit
+                    await asyncio.sleep(1)
+                    continue
+                piece_len = self.get_peice_length(piece_idx)
+                piece_block =await peer.download_piece_from_peers(peer,piece_idx,piece_len)
 
+                if piece_block:
+                    #The Piece is downloaded
+                    #Assemble the peice
+                    complete_piece = b''+join(piece_block[offset] for offset in sorted (piece_block.keys()))
 
+                    #verify
+                    if self.verify_piece(piece_idx,complete_piece):
+                        async  with self.piece_locks[piece_idx]:
+                            self.downloaded_pieces[piece_idx]=complete_piece
+                            self.pieces_in_progress.discard(piece_idx)
 
+                    progress =len(self.downloaded_pieces)
+                    print(f"✓ Piece {piece_idx} downloaded from {ip}:{port} ({progress}/{self.num_pieces})")
 
+                else:
+                    #failed download
+                    async with self.piece_locks[piece_idx]:
+                        self.pieces_in_progress.discard(piece_idx)
+                    await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"Error in peer worker {ip}:{port}: {e}")
+        finally:
+            await peer.close()
+            if peer in self.connected_peers:
+                self.connected_peers.remove(peer)
 
-    def download(self ,output_file):
+    async def download(self ,output_file):
         pass
 
 from TrackerRequest import get_peers_from_tracker
