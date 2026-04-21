@@ -235,8 +235,31 @@ class TorrentDownload:
         expected_hash=self.get_piece_hash(piece_idx)
         return calculate_hash==expected_hash
 
-    def peer_worker(self,ip,port):
-        pass
+    async def peer_worker(self, ip, port):
+        peer =BittorrentPeer(ip,port,self.info_hash,self.peer_id)
+
+        if not await peer.connect():
+            return
+        if not await peer.handshake():
+            await peer.close()
+            return
+
+        # wait for bit field
+        for _ in range(10):
+            msg_id ,payload = await peer.receive_message()
+            if msg_id is not None:
+               await peer.handel_message(msg_id, payload)
+            if peer.bitfield is not None:
+                break
+            await asyncio.sleep(0.1)
+
+        self.connected_peers.append(peer)
+
+
+
+
+
+
     def download(self ,output_file):
         pass
 
