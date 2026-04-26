@@ -5,8 +5,8 @@ import struct
 import hashlib
 import time
 
-from PIL.ImageChops import offset
-from gitdb.util import join
+
+from streamlit import success
 
 import TrackerRequest
 from collections import defaultdict
@@ -43,7 +43,7 @@ class BittorrentPeer:
         #! Peer hand-Shake
         pstr = b"Bittorrent protocol"
         reserved_byte = b"\x00"*8
-        bittorrent_shake = bytes(len(pstr))+pstr + reserved_byte+ self.info_hash + self.peer_id
+        bittorrent_shake = struct.pack("B", len(pstr)) + pstr + reserved_byte + self.info_hash + self.peer_id
         try:
             self.writer.write(bittorrent_shake)
             await self.writer.drain() # flush the write buffer
@@ -145,14 +145,14 @@ class BittorrentPeer:
             Download a single piece from a peer.
             Returns dict of {offset: block_data} or None if failed.
         """
-        if not peer.has_peice():
+        if not peer.has_piece(piece_index):
             return None
         if not peer.interested:
             await peer.send_interested()
 
         # waite for unchoke msg
         wait_time =0
-        while peer.choked and wait_time >5:
+        while peer.choked and wait_time <5:
             msg_id,payload = await peer.receive_message()
             if msg_id is not None:
                 peer.handel_message(msg_id,payload)
@@ -164,16 +164,16 @@ class BittorrentPeer:
         
         #Request all the block of the peice
         blocks_needed=[]
-        for begin in range(0,piece_index,block_size):
+        for begin in range(0,piece_length,block_size):
             length = min(block_size,piece_index-begin)
             blocks_needed.append((begin,length))
             await peer.send_request(piece_index,begin,length)
         # collect blocks
         
-        peice_data={}
+        piece_data={}
         timeout_counter=0
         max_timeout=100
-        while len(peice_data)<len(blocks_needed) and timeout_counter<max_timeout:
+        while len(piece_data)<len(blocks_needed) and timeout_counter<max_timeout:
             msg_id,payload = await peer.receive_message()
             
             if msg_id is None:
@@ -181,16 +181,16 @@ class BittorrentPeer:
                 await asyncio.sleep(0.1)
                 continue
             result = peer.handel_message(msg_id,payload)
-            if result and result[0]=="peice":
+            if result and result[0]=="piece":
                 _,idx,begin,block=result
                 if idx==piece_index:
-                    peice_data[begin]=block
+                    piece_data[begin]=block
                     timeout_counter=0
-        if len(peice_data)<len(blocks_needed):
+        if len(piece_data)<len(blocks_needed):
             return None
         
-        return peice_data
-class TorrentDownload:
+        return piece_data
+class TorrentDownloader:
     """Manage concurrent downloading from multiple peers."""
     def __init__(self,torrent_file_path,peers,max_peers=5):
         # max_peer = 5 because to prevent too many open connection for performance
@@ -235,7 +235,7 @@ class TorrentDownload:
         return self.pieces_hash[piece_idx*20:(piece_idx +1)*20]
 
     def verify_piece(self,piece_idx,piece_data):
-        calculate_hash = hashlib.sha1(piece_idx).digest()
+        calculate_hash = hashlib.sha1(piece_data).digest()
         expected_hash=self.get_piece_hash(piece_idx)
         return calculate_hash==expected_hash
 
@@ -281,7 +281,9 @@ class TorrentDownload:
                 if piece_block:
                     #The Piece is downloaded
                     #Assemble the peice
-                    complete_piece = b''+join(piece_block[offset] for offset in sorted (piece_block.keys()))
+                    complete_piece = b''+b''.join(
+    piece_block[offset] for offset in sorted(piece_block.keys())
+)
 
                     #verify
                     if self.verify_piece(piece_idx,complete_piece):
@@ -305,12 +307,72 @@ class TorrentDownload:
                 self.connected_peers.remove(peer)
 
     async def download(self ,output_file):
-        pass
+        """Start a concurrent Download from multiple peers"""
+
+        # create worker task for peers
+        tasks=[]
+        for ip , port in self.peers[:self.max_peers*2]:
+            task = asyncio.create_task(self.peer_worker(ip,port))
+            tasks.append(task)
+            await  asyncio.sleep(0.1)#stagger connection
+
+            # wait for completion of all the task
+        while len(self.downloaded_pieces)< self.num_pieces and any(not t.done() for t in tasks):
+            await asyncio.sleep(1)
+            print(f"Progress: {len(self.downloaded_pieces)}/{self.num_pieces} pieces, "
+                      f"{len(self.connected_peers)} peers connected")
+            #cancel reaming task:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        await  asyncio.gather(*tasks,return_exceptions=True)
+
+        # Write to file if complete
+        if len(self.downloaded_pieces) == self.num_pieces:
+            print("Dowload Completed!!")
+            with open (output_file,'wb') as f:
+                for i in range(self.num_pieces):
+                    f.write(self.downloaded_pieces[i])
+            return True
+        else:
+                print(f"\n✗ Download incomplete: {len(self.downloaded_pieces)}/{self.num_pieces} pieces")
+                return False
+    async def download_from_peers_async(self,torrent_file,peers,output_file,max_peers=5):
+        """
+            Download a torrent using multiple peers concurrently.
+
+            Args:
+                torrent_file: Path to .torrent file
+                peers: List of (ip, port) tuples
+                output_file: Path to save downloaded file
+                max_peers: Maximum number of concurrent peer connections
+        """
+        downloader = TorrentDownloader(torrent_file,peers,max_peers)
+        flag = await downloader.download(output_file)
+        return success
 
 from TrackerRequest import get_peers_from_tracker
 if __name__ == "__main__":
-    peers = TrackerRequest.get_peers_from_tracker("C:\\Users\VRAJ\Downloads\\test.torrent")
-    bitt = BittorrentPeer("151.59.115.17", 48909 ,b"\xd9\x84\xf6z\xf9\x91{!L\xd8\xb6\x04\x8a\xb5bL}\xf6\xa0z","-PC0001-ItDonueIMvfW")
-    dol = TorrentDownload('C:\\Users\VRAJ\Downloads\\test.torrent',peers)
-    
+    async def main():
+        peers = get_peers_from_tracker('C:\\Users\VRAJ\Downloads\\test.torrent')
+        print(peers)
+        t = TorrentDownloader("C:\\Users\VRAJ\Downloads\\test.torrent",peers)
+        success = await t.download_from_peers_async(
+            'C:\\Users\VRAJ\Downloads\\test.torrent',
+            peers,
+            'downloaded_file.bin',
+            max_peers=50
+        )
+
+        if success:
+            print("Download successful!")
+        else:
+            print("Download failed or incomplete")
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nDownload interrupted by user")
+
     
