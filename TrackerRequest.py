@@ -2,6 +2,8 @@ import random
 import string
 import parser
 import hashlib
+import socket
+import struct
 
 import urllib.parse
 import urllib.request
@@ -20,6 +22,7 @@ def calcu_info_hash(torrent_file):
         info = decode[b"info"]
         info_bencoded = parser.dict_to_bdncode_dict_(info)
         info_hash = hashlib.sha1(info_bencoded).digest()
+        return info_hash
     except KeyError:
         raise ValueError("No ""info"" value found in torrent_file_path")
 
@@ -111,7 +114,10 @@ def get_peers_from_tracker(torrent_file_path,port=6881,numwant=50):
     if isinstance(peers_data,bytes):
         if len(peers_data)%6!=0:
             raise ValueError("Invaild Compact peer_data")
-        #! For non_compact is left
+        for i in range(0, len(peers_data), 6):
+            ip = socket.inet_ntoa(peers_data[i:i+4])
+            port = struct.unpack(">H", peers_data[i+4:i+6])[0]
+            peers.append((ip, port))
 
     elif isinstance(peers_data,list):
         for peer in peers_data:

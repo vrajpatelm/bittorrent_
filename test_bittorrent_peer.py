@@ -123,7 +123,7 @@ class TestHandshake:
         )
         await peer.handshake()
         written = peer.writer.write.call_args[0][0]
-        pstr = b"Bittorrent protocol"
+        pstr = b"BitTorrent protocol"
         assert written[0] == len(pstr)
         assert written[1 : 1 + len(pstr)] == pstr
         assert written[28:48] == peer.info_hash
@@ -277,7 +277,7 @@ class TestHandelMessage:
     async def test_not_interested_clears_flag(self):
         peer = make_peer()
         peer.peer_interested = True
-        await peer.handel_message(4, b"")
+        await peer.handel_message(3, b"")
         assert peer.peer_interested is False
 
     @pytest.mark.asyncio
@@ -285,7 +285,7 @@ class TestHandelMessage:
         peer = make_peer()
         _attach_mock_io(peer)
         bitfield = b"\xf0\x0f"
-        await peer.handel_message(6, bitfield)
+        await peer.handel_message(5, bitfield)
         assert peer.bitfield == bitfield
 
     @pytest.mark.asyncio

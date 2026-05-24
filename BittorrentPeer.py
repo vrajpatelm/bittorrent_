@@ -34,7 +34,7 @@ class BittorrentPeer:
 
     async def handshake(self):
         #! Peer hand-Shake
-        pstr = b"Bittorrent protocol"
+        pstr = b"BitTorrent protocol"
         reserved_byte = b"\x00\x00\x00\x00\x00\x00\x00\x00"
         bittorrent_shake = struct.pack("B", len(pstr)) + pstr + reserved_byte + self.info_hash + self.peer_id
         try:
@@ -53,7 +53,7 @@ class BittorrentPeer:
                 print(f"Invalid handShake from {self.ip} and {self.port}")
             if res_info_hash!=self.info_hash:
                 print(f"Invalid info_hash from {self.ip} and {self.port}")
-            print(f"✓ Handshake successful with {self.ip}:{self.port}")
+            print(f"[OK] Handshake successful with {self.ip}:{self.port}")
             return True
         except Exception as e:
             print(f"The exception happened {e} for ip = {self.ip} and port= {self.port} ")
@@ -99,18 +99,23 @@ class BittorrentPeer:
             self.peer_choking = True
         elif msg_id==1:
             self.peer_choking= False
-            print(f"✓ {self.ip}:{self.port} unchoked us")
+            print(f"[OK] {self.ip}:{self.port} unchoked us")
         elif msg_id==2:
             self.peer_interested=True
         elif msg_id == 3:
-            self.peer_interested = True
-        elif msg_id == 4:
             self.peer_interested = False
-        elif msg_id == 5:
+        elif msg_id == 4:
             piece_index = struct.unpack(">I", payload)[0]
-        elif msg_id==6:
+            if self.bitfield is not None:
+                byte_index = piece_index // 8
+                bit_index = 7 - (piece_index % 8)
+                if byte_index < len(self.bitfield):
+                    temp = bytearray(self.bitfield)
+                    temp[byte_index] |= (1 << bit_index)
+                    self.bitfield = bytes(temp)
+        elif msg_id == 5:
             self.bitfield = payload
-            print(f"✓ Received bitfield from {self.ip}:{self.port}")
+            print(f"[OK] Received bitfield from {self.ip}:{self.port}")
         elif msg_id == 7:
             index = struct.unpack(">I", payload[0:4])[0]
             begin = struct.unpack(">I", payload[4:8])[0]
@@ -133,26 +138,26 @@ class BittorrentPeer:
             self.writer.close()
             await self.writer.wait_closed()
         self.connected = False
-    async def download_piece_from_peers(self,peer,piece_index,piece_length,block_size=16384): # block size 16KB
+    async def download_piece_from_peers(self,piece_index,piece_length,block_size=16384): # block size 16KB
         """
             Download a single piece from a peer.
             Returns dict of {offset: block_data} or None if failed.
         """
-        if not  await peer.has_piece(piece_index):
+        if not  await self.has_piece(piece_index):
             return None
-        if not peer.interested:
-            await peer.send_interested()
+        if not self.interested:
+            await self.send_interested()
 
         # wait for unchoke msg
         wait_time =0
-        while peer.peer_choking and wait_time <5:
-            msg_id,payload = await peer.receive_message()
+        while self.peer_choking and wait_time <5:
+            msg_id,payload = await self.receive_message()
             if msg_id is not None:
-                await peer.handel_message(msg_id,payload)
+                await self.handel_message(msg_id,payload)
             await asyncio.sleep(0.1)
             wait_time+=0.1
 
-        if peer.peer_choking :
+        if self.peer_choking :
             return None
         
         #Request all the block of the peice
@@ -160,20 +165,20 @@ class BittorrentPeer:
         for begin in range(0,piece_length,block_size):
             length = min(block_size,piece_length-begin)
             blocks_needed.append((begin,length))
-            await peer.send_request(piece_index,begin,length)
+            await self.send_request(piece_index,begin,length)
         # collect blocks
         
         piece_data={}
         timeout_counter=0
         max_timeout=100
         while len(piece_data)<len(blocks_needed) and timeout_counter<max_timeout:
-            msg_id,payload = await peer.receive_message()
+            msg_id,payload = await self.receive_message()
             
             if msg_id is None:
                 timeout_counter+=1
                 await asyncio.sleep(0.1)
                 continue
-            result = await peer.handel_message(msg_id,payload)
+            result = await self.handel_message(msg_id,payload)
             if result and result[0]=="piece":
                 _,idx,begin,block=result
                 if idx==piece_index:
@@ -269,7 +274,7 @@ class TorrentDownloader:
                     await asyncio.sleep(1)
                     continue
                 piece_len = self.get_peice_length(piece_idx)
-                piece_block =await peer.download_piece_from_peers(peer,piece_idx,piece_len)
+                piece_block =await peer.download_piece_from_peers(piece_idx,piece_len)
 
                 if piece_block:
                     #The Piece is downloaded
@@ -285,7 +290,7 @@ class TorrentDownloader:
                             self.pieces_in_progress.discard(piece_idx)
 
                     progress =len(self.downloaded_pieces)
-                    print(f"✓ Piece {piece_idx} downloaded from {ip}:{port} ({progress}/{self.num_pieces})")
+                    print(f"[OK] Piece {piece_idx} downloaded from {ip}:{port} ({progress}/{self.num_pieces})")
 
                 else:
                     #failed download
@@ -323,13 +328,13 @@ class TorrentDownloader:
 
         # Write to file if complete
         if len(self.downloaded_pieces) == self.num_pieces:
-            print("Dowload Completed!!")
+            print("Download Completed!!")
             with open (output_file,'wb') as f:
                 for i in range(self.num_pieces):
                     f.write(self.downloaded_pieces[i])
             return True
         else:
-                print(f"\n✗ Download incomplete: {len(self.downloaded_pieces)}/{self.num_pieces} pieces")
+                print(f"\n[FAILED] Download incomplete: {len(self.downloaded_pieces)}/{self.num_pieces} pieces")
                 return False
     async def download_from_peers_async(self,torrent_file,peers,output_file,max_peers=5):
         """
@@ -348,11 +353,15 @@ class TorrentDownloader:
 from TrackerRequest import get_peers_from_tracker
 if __name__ == "__main__":
     async def main():
-        peers = get_peers_from_tracker('C:\\Users\VRAJ\Downloads\\test.torrent')
-        print(peers)
-        t = TorrentDownloader("C:\\Users\VRAJ\Downloads\\test.torrent",peers)
+        torrent_path = "alicesadventures19033gut_archive.torrent"
+        if not os.path.exists(torrent_path):
+            # Check parent directory too
+            torrent_path = os.path.join("..", torrent_path)
+        peers = get_peers_from_tracker(torrent_path)
+        print(f"Found peers from tracker: {peers}")
+        t = TorrentDownloader(torrent_path, peers)
         success = await t.download_from_peers_async(
-            'C:\\Users\VRAJ\Downloads\\test.torrent',
+            torrent_path,
             peers,
             'downloaded_file.bin',
             max_peers=50
